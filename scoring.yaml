@@ -1,0 +1,105 @@
+# Scoring configuration — weights & thresholds for the signal engine.
+# These are STARTING defaults; tune them in the backtest (Phase 3).
+# Each condition references a column from an indicator module (see
+# signals/scoring/bundle.py for module names).
+#
+#   match: truthy            -> boolean column is True   (default)
+#   match: {eq: confirmed}   -> column equals a value
+#   match: {ge: 9}           -> column >= a number       (gt/le/lt/ne too)
+#
+# side: entry (bullish) | exit (bearish)
+
+scoring:
+  entry_threshold: 6.0
+  exit_threshold: 5.0
+
+  # Master on/off per indicator module. Set false to drop ALL of that
+  # module's conditions without editing them individually. (Unlisted =
+  # enabled.) Each condition below also supports an `enabled: false` flag
+  # for finer control.
+  modules:
+    macd_rsi: true
+    ma_cross: true
+    structure: true
+    structure_weekly: true
+    divergence: true
+    volume: true
+    td: true
+    fibonacci: true
+    base: true                  # beaten-down base near multi-year lows
+    institutional_bias: false   # momentum filter — hurt the reversal setup
+
+  # Optional per-module weight multiplier (unlisted = 1.0). Scales every
+  # condition in that module, so you can boost/dampen a whole indicator
+  # group with one number. Final weight = condition weight x this.
+  # Example: divergence: 1.5 makes all divergence signals 50% stronger.
+  module_weights:
+    macd_rsi: 1.0
+    ma_cross: 1.0
+    structure: 1.0
+    structure_weekly: 1.0
+    divergence: 1.0
+    volume: 1.0
+    td: 1.0
+    fibonacci: 1.0
+    base: 1.0
+
+  trend_context:
+    enabled: true
+    full_align: 1.5      # all of weekly/daily/4h agree -> boost
+    conflict: 0.5        # a higher timeframe opposes    -> dampen
+
+  conditions:
+    # ---------- ENTRY (bullish) ----------
+    - {name: macd_cross_up,            module: macd_rsi,   column: macd_cross_up,             side: entry, weight: 2.0}
+    - {name: macd_hist_rising,         module: macd_rsi,   column: macd_hist_rising,          side: entry, weight: 0.5}
+    - {name: rsi_rising_from_oversold, module: macd_rsi,   column: rsi_rising_from_oversold,  side: entry, weight: 1.5}
+    - {name: rsi_cross_50_up,          module: macd_rsi,   column: rsi_cross_50_up,           side: entry, weight: 1.0}
+    - {name: golden_50_200,            module: ma_cross,   column: golden_50_200,             side: entry, weight: 2.5}
+    - {name: golden_20_50,             module: ma_cross,   column: golden_20_50,              side: entry, weight: 1.5}
+    - {name: price_reclaims_200,       module: ma_cross,   column: price_above_200,           side: entry, weight: 1.0}
+    - {name: w_confirmed,              module: structure,  column: w_state,    side: entry, weight: 3.0, match: {eq: confirmed}}
+    - {name: w_potential,              module: structure,  column: w_state,    side: entry, weight: 1.0, match: {eq: potential}}
+    # Weekly W (double bottom) — higher timeframe, DOUBLE weight of daily
+    - {name: weekly_w_confirmed,       module: structure_weekly, column: wk_w_state, side: entry, weight: 6.0, match: {eq: confirmed}}
+    - {name: weekly_w_potential,       module: structure_weekly, column: wk_w_state, side: entry, weight: 2.0, match: {eq: potential}}
+    - {name: breakout_up,              module: structure,  column: breakout_up,               side: entry, weight: 1.5}
+    - {name: uptrend_structure,        module: structure,  column: structure_trend, side: entry, weight: 0.5, match: {ge: 1}}
+    - {name: td_buy_setup_9,           module: td,         column: buy_setup,      side: entry, weight: 2.0, match: {ge: 9}}
+    - {name: td_buy_countdown_13,      module: td,         column: buy_countdown,  side: entry, weight: 3.0, match: {ge: 13}}
+    - {name: bull_div_confirmed,       module: divergence, column: bull_div_confirmed_any,    side: entry, weight: 2.5}
+    - {name: bull_div_potential,       module: divergence, column: bull_div_potential_n, side: entry, weight: 1.0, match: {ge: 1}}
+    - {name: fib_786_pullback,         module: fibonacci,  column: near_fib_786,              side: entry, weight: 1.0}
+    # Beaten-down base near multi-year lows (consolidating "not hot" names)
+    - {name: base_consolidating_low,   module: base, column: base_setup,        side: entry, weight: 2.5}
+    - {name: base_accumulating_low,    module: base, column: base_accumulating, side: entry, weight: 1.5}
+    - {name: near_multiyear_lows,      module: base, column: near_lows,          side: entry, weight: 1.0}
+    # Institutional Bias (IIB): 9/18 EMA bias + 30 SMA trade location.
+    # Defined but OFF via modules.institutional_bias=false above (it's a
+    # momentum filter that hurt this reversal setup). Flip that to true to
+    # re-enable, e.g. for a breakout/continuation strategy.
+    - {name: institutional_bias_bull,  module: institutional_bias, column: ib_bullish,        side: entry, weight: 1.0}
+    - {name: ib_long_location,         module: institutional_bias, column: ib_long_location,  side: entry, weight: 2.0}
+    - {name: rvol_up_day,              module: volume,     column: rvol_up_day,               side: entry, weight: 1.0}
+    - {name: obv_rising,               module: volume,     column: obv_rising,                side: entry, weight: 0.5}
+    - {name: buying_pressure,          module: volume,     column: buying_pressure,           side: entry, weight: 0.5}
+
+    # ---------- EXIT (bearish) ----------
+    - {name: macd_cross_down,             module: macd_rsi,   column: macd_cross_down,            side: exit, weight: 2.0}
+    - {name: rsi_falling_from_overbought, module: macd_rsi,   column: rsi_falling_from_overbought, side: exit, weight: 1.5}
+    - {name: rsi_cross_50_down,           module: macd_rsi,   column: rsi_cross_50_down,          side: exit, weight: 1.0}
+    - {name: death_50_200,                module: ma_cross,   column: death_50_200,               side: exit, weight: 2.5}
+    - {name: death_20_50,                 module: ma_cross,   column: death_20_50,                side: exit, weight: 1.5}
+    - {name: price_loses_200,             module: ma_cross,   column: price_below_200,            side: exit, weight: 1.0}
+    - {name: m_confirmed,                 module: structure,  column: m_state,    side: exit, weight: 3.0, match: {eq: confirmed}}
+    # Weekly M (double top) — higher timeframe, DOUBLE weight of daily
+    - {name: weekly_m_confirmed,          module: structure_weekly, column: wk_m_state, side: exit, weight: 6.0, match: {eq: confirmed}}
+    - {name: weekly_m_potential,          module: structure_weekly, column: wk_m_state, side: exit, weight: 2.0, match: {eq: potential}}
+    - {name: breakout_down,               module: structure,  column: breakout_down,              side: exit, weight: 1.5}
+    - {name: td_sell_setup_9,             module: td,         column: sell_setup,     side: exit, weight: 2.0, match: {ge: 9}}
+    - {name: td_sell_countdown_13,        module: td,         column: sell_countdown, side: exit, weight: 3.0, match: {ge: 13}}
+    - {name: bear_div_confirmed,          module: divergence, column: bear_div_confirmed_any,     side: exit, weight: 2.5}
+    - {name: selling_pressure,            module: volume,     column: selling_pressure,           side: exit, weight: 0.5}
+    # Institutional Bias exit side — OFF via modules toggle (see above).
+    - {name: institutional_bias_bear,     module: institutional_bias, column: ib_bearish,         side: exit, weight: 1.0}
+    - {name: ib_short_location,           module: institutional_bias, column: ib_short_location,  side: exit, weight: 2.0}

@@ -1,0 +1,16 @@
+# Secrets — never commit
+.env
+config.yaml
+
+# Local data cache (Parquet + SQLite)
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# transient image encodings
+*.b64

@@ -1,0 +1,6 @@
+symbol,date,close,divergences
+GRMN,2026-06-18,234.2,rsi|macd|obv|mfi
+HIG,2026-06-18,128.25,mfi
+PFE,2026-06-18,25.21,macd|obv
+TXT,2026-06-18,89.47,obv|cmf
+XEL,2026-06-18,77.41,macd|obv
