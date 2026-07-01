@@ -130,19 +130,124 @@ python -m signals.cli signal --symbol AAPL
 python -m signals.cli signal --symbol AAPL --days 60 --refresh
 python -m signals.cli signal --asset crypto --symbol BTCUSDT
 
-# Backtest the scoring engine (Phase 3)
+# Backtest the scoring engine (Phase 3) — see "Backtesting" below
 python -m signals.cli backtest --symbol AAPL
-python -m signals.cli backtest --symbol AAPL --split 2024-06-01 --sweep --max-hold 60 --stop-pct 0.10
-python -m signals.cli backtest --asset crypto --symbol BTCUSDT
+python -m signals.cli backtest --sp500 --out sp500_results.csv
 ```
+
+## Watchlist scan (`signals/scan_base_div.py`)
+
+Produces the "bottom base + divergence" watchlist (CSV always written; add
+`--gsheet TITLE` to also push to Google Sheets).
+
+```bash
+# Daily base+divergence, all universes
+python -m signals.scan_base_div
+
+# Recent divergences only (no base filter), tighter window
+python -m signals.scan_base_div --no-base --timeframe daily --recent-days 20
+```
+
+### Enrichment columns (opt-in)
+
+Add screener columns straight into the output so the CSV/Sheet is ready to use
+— no separate post-processing step:
+
+| Flag | Column | What it is | Needs |
+| --- | --- | --- | --- |
+| `--canslim` | `canslim` | CAN SLIM **technical** proxy: price > SMA20/50/200 and RSI(14) > 50, scored `0/4`..`4/4 PASS`. Always computed from *daily* bars, even on `--timeframe weekly`. | price cache only |
+| `--wdb` | `wdb` | Deep-value screen: P/E < 10, P/B < 1, Price/Cash < 3, scored `0/3`..`3/3 PASS` (`n/a` when no fundamentals, e.g. ETFs). | `yfinance` + internet |
+| `--ai` | `ai_analysis` | One-click Google AI Mode (Gemini) URL running a structured equity-research prompt for the ticker. | none |
+| `--enrich` | all three | Shortcut for `--canslim --wdb --ai`. | as above |
+
+```bash
+# Fully enriched daily watchlist, pushed to a Google Sheet
+python -m signals.scan_base_div --enrich \
+  --out recent_div_daily.csv \
+  --gsheet "Recent Divergences — DAILY" \
+  --gsheet-cred scanner-500915-42346172c631.json
+```
+
+Notes: `--wdb` adds one Yahoo fundamentals fetch per matched symbol (slower,
+needs network); WDB reflects *current* fundamentals, not the scan date. The
+enrichment helpers live in `signals/enrich.py` and degrade gracefully (a
+missing dependency or data gap yields `n/a`, never a crash).
+
+## Backtesting
 
 The backtester (`signals/backtest/`) simulates long-only trades with
 realistic costs and **no look-ahead** (signals on a bar's close fill at
-the next bar's open). `--split DATE` reports in-sample vs out-of-sample;
-`--sweep` grids entry/exit thresholds. Metrics: win rate (primary),
-profit factor, expectancy, max drawdown, CAGR, vs buy-&-hold. Simulation
-math is covered by `tests/test_backtest.py` (next-open fills, costs,
-stop, max-hold).
+the next bar's open). It runs in two modes that share the same engine and
+cost model:
+
+- **Single symbol** (`--symbol`) — full per-trade report, with optional
+  `--split` (in-sample vs out-of-sample) and `--sweep` (entry/exit
+  threshold grid).
+- **Portfolio** (`--symbols`, `--sp500`, `--crypto-top`) — runs every
+  symbol and aggregates: pooled trade stats (win rate, profit factor,
+  expectancy) plus a per-symbol distribution (% profitable, % that beat
+  buy-&-hold, median/avg return). `--out FILE.csv` writes the per-symbol
+  table.
+
+### One stock
+
+```bash
+python -m signals.cli backtest --symbol AAPL
+# train/test split + threshold sweep + risk controls
+python -m signals.cli backtest --symbol AAPL --split 2024-06-01 --sweep \
+    --max-hold 60 --stop-pct 0.10
+```
+
+### One crypto pair
+
+```bash
+python -m signals.cli backtest --asset crypto --symbol BTCUSDT
+python -m signals.cli backtest --asset crypto --symbol ETHUSDT --split 2024-06-01
+```
+
+### Multiple symbols (portfolio)
+
+```bash
+python -m signals.cli backtest --symbols AAPL MSFT NVDA
+python -m signals.cli backtest --symbols AAPL MSFT NVDA --out tech_results.csv
+# a basket of crypto pairs
+python -m signals.cli backtest --asset crypto --symbols BTCUSDT ETHUSDT SOLUSDT
+```
+
+### Full S&P 500
+
+```bash
+python -m signals.cli backtest --sp500
+python -m signals.cli backtest --sp500 --out sp500_results.csv   # save per-symbol CSV
+```
+
+### All crypto top pairs
+
+```bash
+python -m signals.cli backtest --crypto-top --out crypto_results.csv
+```
+
+### Flags (all modes)
+
+| Flag | Effect | Default |
+|---|---|---|
+| `--scoring FILE` | scoring config to use | `scoring.yaml` |
+| `--fee-bps N` | per-side fee, basis points | 10 |
+| `--slippage-bps N` | per-side slippage, basis points | 5 |
+| `--stop-pct X` | hard stop (e.g. `0.08` = 8%) | none |
+| `--max-hold N` | force-exit after N bars | none |
+| `--refresh` | re-fetch latest data before running | off |
+| `--out FILE.csv` | per-symbol results (portfolio modes only) | — |
+| `--split DATE` | in-sample vs out-of-sample (single-symbol only) | — |
+| `--sweep` | grid entry/exit thresholds (single-symbol only) | off |
+
+`--symbol`, `--symbols`, `--sp500`, and `--crypto-top` are mutually
+exclusive — pick one. `--split`/`--sweep` apply to single-symbol runs and
+are ignored in portfolio mode. Backtests read from the local Parquet
+cache (run the matching `fetch-*` command first, or pass `--refresh`).
+Metrics: win rate (primary), profit factor, expectancy, max drawdown,
+CAGR, vs buy-&-hold. Simulation math is covered by
+`tests/test_backtest.py` (next-open fills, costs, stop, max-hold).
 
 Weekly candles are derived automatically from daily; 4h stock candles
 from Polygon 1h. So the multi-timeframe trend context (weekly/daily/4h)

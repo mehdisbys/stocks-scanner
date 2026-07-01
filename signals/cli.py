@@ -26,6 +26,7 @@ from .data.universe import get_crypto_universe, get_sp500
 from .indicators.trend import build_context
 from .scoring.engine import ScoringConfig, ScoringEngine
 from .backtest.engine import run_backtest
+from .backtest.portfolio import run_portfolio, report_portfolio
 from .backtest.tuning import split_backtest, sweep_thresholds
 
 
@@ -138,15 +139,58 @@ def _load_symbol(svc: DataService, sym: str, asset: str, refresh: bool):
     return svc.get(AssetClass.STOCK, sym, Timeframe.D1, source="history")
 
 
+def _backtest_universe(args: argparse.Namespace) -> tuple[list[str], str]:
+    """Resolve the symbol list and asset class for a backtest run."""
+    if args.sp500:
+        return get_sp500(), "stock"
+    if args.crypto_top:
+        return get_crypto_universe(), "crypto"
+    if args.symbols:
+        return args.symbols, args.asset
+    return [args.symbol], args.asset
+
+
 def cmd_backtest(svc: DataService, args: argparse.Namespace) -> None:
     cfg = ScoringConfig.load(args.scoring)
-    df = _load_symbol(svc, args.symbol, args.asset, args.refresh)
-    if df.empty:
-        print(f"No data for {args.symbol}.", file=sys.stderr)
-        return
     bt = dict(fee_bps=args.fee_bps, slippage_bps=args.slippage_bps,
               stop_pct=args.stop_pct, max_hold=args.max_hold)
-    print(f"{args.symbol} ({args.asset}) — {len(df)} bars, "
+    symbols, asset = _backtest_universe(args)
+
+    # Portfolio (multi-symbol) mode.
+    if len(symbols) > 1:
+        # run_portfolio skips symbols with fewer than this many bars, so only
+        # keep those that will actually contribute to the aggregate stats.
+        min_bars = 250
+        data: dict[str, pd.DataFrame] = {}
+        for i, sym in enumerate(symbols, 1):
+            try:
+                df = _load_symbol(svc, sym, asset, args.refresh)
+                if len(df) >= min_bars:
+                    data[sym] = df
+            except Exception as e:  # noqa: BLE001
+                print(f"[{i}/{len(symbols)}] {sym}: ERROR {e}", file=sys.stderr)
+        if not data:
+            print("No symbol had enough history to backtest "
+                  f"(need >= {min_bars} bars).", file=sys.stderr)
+            return
+        print(f"Portfolio backtest — {len(data)}/{len(symbols)} symbols "
+              f"with >= {min_bars} bars ({asset})\n")
+        result = run_portfolio(data, cfg, **bt)
+        print(report_portfolio(result, "(full history)"))
+        if args.out:
+            result["per_symbol"].to_csv(args.out, index=False)
+            print(f"\nPer-symbol results written to {args.out}")
+        print("\nNote: results are backtested (not forward-tested). "
+              "Not financial advice.")
+        return
+
+    # Single-symbol mode.
+    sym = symbols[0]
+    df = _load_symbol(svc, sym, asset, args.refresh)
+    if df.empty:
+        print(f"No data for {sym}.", file=sys.stderr)
+        return
+    print(f"{sym} ({asset}) — {len(df)} bars, "
           f"{df.index.min().date()} -> {df.index.max().date()}\n")
 
     if args.split:
@@ -207,9 +251,22 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--scoring", default="scoring.yaml")
     s.add_argument("--refresh", action="store_true", help="re-fetch latest data first")
 
-    b = sub.add_parser("backtest", help="backtest the scoring engine on a symbol")
-    b.add_argument("--symbol", required=True)
-    b.add_argument("--asset", default="stock", choices=["stock", "crypto"])
+    b = sub.add_parser("backtest",
+                       help="backtest the scoring engine (one symbol, "
+                            "many symbols, the S&P 500, or crypto top)")
+    gb = b.add_mutually_exclusive_group(required=True)
+    gb.add_argument("--symbol", help="single symbol, e.g. AAPL or BTCUSDT")
+    gb.add_argument("--symbols", nargs="+",
+                    help="space-separated list, e.g. --symbols AAPL MSFT NVDA")
+    gb.add_argument("--sp500", action="store_true",
+                    help="portfolio backtest over the full S&P 500")
+    gb.add_argument("--crypto-top", action="store_true",
+                    help="portfolio backtest over the top crypto pairs")
+    b.add_argument("--asset", default="stock", choices=["stock", "crypto"],
+                   help="asset class for --symbol/--symbols (ignored for "
+                        "--sp500 / --crypto-top)")
+    b.add_argument("--out", help="write per-symbol results to this CSV "
+                                 "(portfolio mode)")
     b.add_argument("--scoring", default="scoring.yaml")
     b.add_argument("--split", help="train/test split date YYYY-MM-DD (out-of-sample from here)")
     b.add_argument("--sweep", action="store_true", help="grid-sweep entry/exit thresholds")

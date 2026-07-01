@@ -3,3 +3,10 @@ pyarrow>=14.0
 requests>=2.31
 PyYAML>=6.0
 lxml>=5.0
+
+# Optional: only needed for `scan_base_div --gsheet` (push results to Google Sheets)
+gspread>=6.0
+google-auth>=2.0
+
+# Optional: only needed for `scan_base_div --wdb` (deep-value fundamentals from Yahoo)
+yfinance>=0.2
