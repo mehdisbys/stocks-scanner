@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd job: run the scanner + write the alert digest once a day.
+
+  Install (runs as your user, from Finder-visible paths):
+    cp "launchd/com.cryptostockscanner.daily.plist" ~/Library/LaunchAgents/
+    launchctl load  ~/Library/LaunchAgents/com.cryptostockscanner.daily.plist
+
+  Run it right now to test (without waiting for the scheduled time):
+    launchctl start com.cryptostockscanner.daily
+
+  Change the time by editing StartCalendarInterval (24h clock, local time).
+  Stop / remove:
+    launchctl unload ~/Library/LaunchAgents/com.cryptostockscanner.daily.plist
+
+  NOTE: paths are absolute and must match where the project lives. If you move
+  the project folder, update ProgramArguments, WorkingDirectory and the log
+  paths below.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cryptostockscanner.daily</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/mehdi/claude/Projects/Crypto and Stock Scanner/run_daily.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/mehdi/claude/Projects/Crypto and Stock Scanner</string>
+
+  <!-- Run every day at 18:00 local time (after the US equities close settles). -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>18</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+
+  <!-- If the Mac was asleep at 18:00, run as soon as it wakes. -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/mehdi/claude/Projects/Crypto and Stock Scanner/alerts/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/mehdi/claude/Projects/Crypto and Stock Scanner/alerts/launchd.err.log</string>
+</dict>
+</plist>

@@ -25,15 +25,20 @@ import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# key -> filename. The four watchlist keys share one renderer; backtest is its own.
+# key -> filename. The watchlist keys share one renderer; backtest is its own.
 FILES = {
     "base": "base_div_sheet_daily.csv",     # daily base+div
     "recent": "recent_div_daily.csv",       # daily recent (no-base)
     "wbase": "base_div_sheet.csv",          # weekly base+div
     "wrecent": "recent_div_weekly.csv",     # weekly recent (no-base)
+    "h4": "recent_div_4h.csv",              # 4h recent (no-base, intraday)
+    "crypto": "recent_div_crypto_daily.csv",   # crypto daily recent (Binance)
+    "cryptow": "recent_div_crypto_weekly.csv",  # crypto weekly recent
+    "cryptoh4": "recent_div_crypto_4h.csv",     # crypto 4h recent
     "backtest": "SP500_per_symbol_summary.csv",
 }
-WATCH_KEYS = ("base", "recent", "wbase", "wrecent")
+WATCH_KEYS = ("base", "recent", "wbase", "wrecent", "h4",
+              "crypto", "cryptow", "cryptoh4")
 
 
 def load_csv(name):
@@ -70,9 +75,15 @@ def main():
     canslim = {}
     for r in load_csv("canslim.csv")[0]:
         canslim[r["symbol"]] = {"label": r.get("canslim", ""), "score": num(r.get("canslim_score"))}
+    canslim_real = {}
+    for r in load_csv("canslim_real.csv")[0]:
+        canslim_real[r["symbol"]] = r.get("canslim_real", "")
     wdb = {}
     for r in load_csv("wdb.csv")[0]:
         wdb[r["symbol"]] = {"label": r.get("wdb", ""), "score": num(r.get("wdb_score"))}
+    sector = {}
+    for r in load_csv("sectors.csv")[0]:
+        sector[r["symbol"]] = r.get("sector", "")
 
     for key, fname in FILES.items():
         rows, mtime = load_csv(fname)
@@ -86,12 +97,16 @@ def main():
                 else:
                     c = canslim.get(sym, {})
                     r["canslim"], r["canslim_score"] = c.get("label", ""), c.get("score")
+                cr = r.get("canslim_real") or canslim_real.get(sym, "")
+                r["canslim_real"], r["canslim_real_score"] = cr, _score(cr)
                 wl = r.get("wdb")
                 if wl:
                     r["wdb"], r["wdb_score"] = wl, _score(wl)
                 else:
                     w = wdb.get(sym, {})
                     r["wdb"], r["wdb_score"] = w.get("label", ""), w.get("score")
+                if not r.get("sector"):
+                    r["sector"] = sector.get(sym, "")
         data[key] = rows
         meta[key] = {"file": fname, "rows": len(rows), "updated": mtime}
 
@@ -107,15 +122,19 @@ def main():
                 r[col] = num(r[col])
 
     has_weekly = bool(data["wbase"] or data["wrecent"])
+    has_h4 = bool(data["h4"])
+    has_crypto = bool(data["crypto"] or data["cryptow"] or data["cryptoh4"])
 
     payload = {
         "generated": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
         "meta": meta,
         "has_weekly": has_weekly,
+        "has_h4": has_h4,
+        "has_crypto": has_crypto,
         **{k: data[k] for k in FILES},
     }
 
-    # Tabs / panels / boot calls — weekly only when present.
+    # Tabs / panels / boot calls — weekly/4h only when present.
     tabs = [("base", "Base + Divergence (Daily)"), ("recent", "Recent Div (Daily)")]
     panels = _watch_panel("base", "base") + _watch_panel("recent", "recent")
     boot = "initWatch('base','base'); initWatch('recent','recent');"
@@ -123,6 +142,18 @@ def main():
         tabs += [("wbase", "Base + Divergence (Weekly)"), ("wrecent", "Recent Div (Weekly)")]
         panels += _watch_panel("wbase", "base") + _watch_panel("wrecent", "recent")
         boot += " initWatch('wbase','base'); initWatch('wrecent','recent');"
+    if has_h4:
+        tabs.append(("h4", "Recent Div (4h)"))
+        panels += _watch_panel("h4", "recent")
+        boot += " initWatch('h4','recent');"
+    if has_crypto:
+        for k, lbl in (("crypto", "Crypto (Daily)"),
+                       ("cryptow", "Crypto (Weekly)"),
+                       ("cryptoh4", "Crypto (4h)")):
+            if data[k]:
+                tabs.append((k, lbl))
+                panels += _watch_panel(k, "recent")
+                boot += f" initWatch('{k}','recent');"
     tabs.append(("backtest", "S&amp;P 500 Backtest"))
     panels += _BACKTEST_PANEL
     boot += " initBacktest();"
@@ -151,7 +182,9 @@ def _watch_panel(key, style):
                  if style == "base" else "")
     footnote = ('<div class="footnote">off_high = drawdown from prior high · range_position = '
                 'where price sits in its range (0=low,1=high) · div_count = confirmed divergence '
-                'indicators · CANSLIM = price&gt;SMA20/50/200 &amp; RSI&gt;50 (daily) · '
+                'indicators · Trend = price&gt;SMA20/50/200 &amp; RSI&gt;50 (daily momentum proxy) · '
+                'CANSLIM = real C/A/N/L/I/M score from fundamentals (earnings growth, relative '
+                'strength, institutions, market direction; Supply omitted) · '
                 'WDB = P/E&lt;10, P/B&lt;1, Price/Cash&lt;3.</div>') if style == "base" else ""
     active = " active" if key == "base" else ""
     return f'''
@@ -164,7 +197,9 @@ def _watch_panel(key, style):
     <div class="toolbar" style="margin-top:18px">
       <input type="search" id="q-{key}" placeholder="Filter by symbol…">
       <select id="u-{key}"><option value="">All universes</option><option>SP500</option><option>broader</option></select>
+      <select id="sec-{key}"><option value="">All sectors</option></select>
       {bt_select}
+      <label class="chk"><input type="checkbox" id="new-{key}"> New only</label>
       <span class="count" id="count-{key}"></span>
     </div>
     <div class="tablewrap"><table id="t-{key}"></table></div>
@@ -246,6 +281,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .badge{padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;}
   .badge.sp{background:#1f2d4d;color:#86a8f0}
   .badge.broader{background:#3a2a16;color:#e0b066}
+  .badge.new{background:#123a2a;color:#3fe0a0;letter-spacing:.03em}
+  .ago{color:var(--muted);font-size:11px;}
+  .sector{color:#b9a3e3;font-size:12px;}
+  .chk{color:var(--muted);font-size:12.5px;display:inline-flex;align-items:center;gap:5px;cursor:pointer;}
   .pos{color:var(--green)}.neg{color:var(--red)}
   .tablewrap{max-height:70vh;overflow:auto;border-radius:10px;}
   .footnote{color:var(--muted);font-size:11.5px;margin-top:10px;}
@@ -271,6 +310,8 @@ const $ = s => document.querySelector(s);
   const m = DATA.meta;
   let s = `Generated ${DATA.generated} · daily base ${m.base.rows} (${m.base.updated||'—'}) · recent ${m.recent.rows}`;
   if(DATA.has_weekly) s += ` · weekly base ${m.wbase.rows} / recent ${m.wrecent.rows}`;
+  if(DATA.has_h4) s += ` · 4h recent ${m.h4.rows}`;
+  if(DATA.has_crypto) s += ` · crypto ${m.crypto.rows}/${m.cryptow.rows}/${m.cryptoh4.rows} (d/w/4h)`;
   s += ` · backtest ${m.backtest.rows} symbols · static view (no live scan)`;
   document.getElementById('subline').textContent = s;
 })();
@@ -291,6 +332,10 @@ const chips = s => !s? '' : s.split('|').map(x=>`<span class="chip">${x}</span>`
 const canslimCell = (v,r) => { const s=r.canslim_score; if(s==null) return '';
   const col = s>=4?'var(--green)':(s>=3?'var(--amber)':'var(--muted)');
   return `<span style="color:${col};font-weight:${s>=4?'650':'500'}">${v||''}</span>`; };
+const canslimRealCell = (v,r) => { const s=r.canslim_real_score; if(v==null||v==='') return '';
+  if(v==='n/a') return '<span style="color:var(--muted)">n/a</span>';
+  const col = s>=6?'var(--green)':(s>=4?'var(--amber)':'var(--muted)');
+  return `<span style="color:${col};font-weight:${s>=6?'650':'500'}" title="C·A·N·L·I·M (Supply omitted)">${v}</span>`; };
 const wdbCell = (v,r) => { const s=r.wdb_score; if(v==null||v==='') return ''; if(v==='n/a') return '<span style="color:var(--muted)">n/a</span>';
   const col = s>=3?'var(--green)':(s>=2?'var(--amber)':'var(--muted)');
   return `<span style="color:${col};font-weight:${s>=3?'650':'500'}">${v}</span>`; };
@@ -335,50 +380,77 @@ function makeTable(tableId, rows, cols, state){
 }
 
 /* ---------- shared watchlist columns ---------- */
-function watchCols(){ return [
+/* The MA/RSI proxy is labelled 'Trend' everywhere (it's a trend/momentum check,
+   not real CANSLIM). The genuine CANSLIM column (canslim_real, C/A/N/L/I/M from
+   fundamentals) is added only when the scan produced it (stocks with
+   --canslim-real). */
+function watchCols(hasReal){ return [
   {key:'symbol',label:'Symbol',fmt:(v)=>`<span class="sym">${v}</span>`},
+  {key:'new',label:'New',fmt:(v,r)=> v==='NEW'? '<span class="badge new">NEW</span>'
+      : (r.days_on_list!=null && r.days_on_list!==''? `<span class="ago">${r.days_on_list}d</span>`:'')},
   {key:'universe',label:'Univ',fmt:ubadge},
+  {key:'sector',label:'Sector',fmt:v=>v?`<span class="sector">${v}</span>`:''},
   {key:'close',label:'Close',num:1,fmt:v=>fix(v,2)},
   {key:'off_high',label:'Off High',num:1,fmt:v=>signed(v*100,1)+'%'},
   {key:'range_position',label:'Range Pos',num:1,fmt:v=>fix(v,2)},
   {key:'base_type',label:'Base Type'},
   {key:'div_count',label:'Div #',num:1},
-  {key:'canslim',label:'CANSLIM',fmt:canslimCell},
+  {key:'canslim',label:'Trend',fmt:canslimCell},
+  ...(hasReal? [{key:'canslim_real',label:'CANSLIM',fmt:canslimRealCell}] : []),
   {key:'wdb',label:'WDB',fmt:wdbCell},
-  {key:'div_indicators',label:'Indicators',fmt:chips},
   {key:'div_last',label:'Last Conf.'},
   {key:'tradingview_chart',label:'Chart',fmt:(v)=>v?`<a class="tv" href="${v}" target="_blank">TV ↗</a>`:''},
   {key:'symbol',label:'AI',fmt:(v)=>`<a class="tv" href="${aiUrl(v)}" target="_blank">AI ↗</a>`},
+  {key:'div_indicators',label:'Indicators',fmt:chips},
 ];}
 
 /* ---------- one renderer for all four watchlist tabs ---------- */
 function initWatch(key, style){
   const rows = DATA[key] || [];
   const sp = rows.filter(r=>r.universe==='SP500').length;
+  const nNew = rows.filter(r=>r.new==='NEW').length;
+  const hasHistory = rows.some(r=>'new' in r);
+  const newCard = hasHistory ? card('New today', nNew, nNew? 'green':'') : '';
   if(style==='base'){
     const strong = rows.filter(r=>r.div_count>=7).length;
-    const avgOff = rows.reduce((a,r)=>a+(r.off_high||0),0)/(rows.length||1);
     $('#cards-'+key).innerHTML = card('Names',rows.length)+card('SP500 / Broader',`${sp} / ${rows.length-sp}`)
-      +card('Strong (≥7 div)',strong,'green')+card('Avg off high',(avgOff*100).toFixed(0)+'%','red');
+      +card('Strong (≥7 div)',strong,'green')+newCard;
     barChart('chart-'+key+'-a', topIndicators(rows));
   } else {
     $('#cards-'+key).innerHTML = card('Names',rows.length)+card('SP500 / Broader',`${sp} / ${rows.length-sp}`)
-      +card('Avg div #',(rows.reduce((a,r)=>a+(r.div_count||0),0)/(rows.length||1)).toFixed(1),'green')
-      +card('With base type',rows.filter(r=>r.base_type).length,'amber');
+      +card('Avg div #',(rows.reduce((a,r)=>a+(r.div_count||0),0)/(rows.length||1)).toFixed(1),'green')+newCard;
     lineChart('chart-'+key+'-a', byDate(rows));
   }
   donut('chart-'+key+'-b', countBy(rows,'universe'));
-  const btSel = $('#bt-'+key);
+  const btSel = $('#bt-'+key), newChk = $('#new-'+key), secSel = $('#sec-'+key);
+  if(!hasHistory && newChk){ const lbl=newChk.closest('.chk'); if(lbl) lbl.style.display='none'; }
   if(btSel){
     const bts=[...new Set(rows.map(r=>r.base_type).filter(Boolean))].sort();
     btSel.insertAdjacentHTML('beforeend', bts.map(b=>`<option>${b}</option>`).join(''));
   }
+  const uSel = $('#u-'+key);
+  if(uSel){  // add any universe present in the data but missing from the static list
+    const have=new Set([...uSel.options].map(o=>o.value));
+    [...new Set(rows.map(r=>r.universe).filter(Boolean))].sort()
+      .filter(u=>!have.has(u)).forEach(u=>uSel.insertAdjacentHTML('beforeend',`<option>${u}</option>`));
+  }
+  const secs=[...new Set(rows.map(r=>r.sector).filter(Boolean))].sort();
+  if(secSel){
+    if(!secs.length){ secSel.style.display='none'; }
+    else secSel.insertAdjacentHTML('beforeend', secs.map(s=>`<option>${s}</option>`).join(''));
+  }
   const state={sortCol: style==='base'?'div_count':'div_last',asc:false,filter:r=>{
     const q=$('#q-'+key).value.toLowerCase(), u=$('#u-'+key).value, bt=btSel?btSel.value:'';
-    return (!q||r.symbol.toLowerCase().includes(q)) && (!u||r.universe===u) && (!bt||r.base_type===bt);
+    const sec=secSel?secSel.value:'', nw = newChk && newChk.checked;
+    return (!q||r.symbol.toLowerCase().includes(q)) && (!u||r.universe===u)
+        && (!bt||r.base_type===bt) && (!sec||r.sector===sec) && (!nw || r.new==='NEW');
   },onCount:(n,t)=>$('#count-'+key).textContent=`${n} of ${t}`};
-  makeTable('t-'+key, rows, watchCols(), state);
-  (['q-'+key,'u-'+key].concat(btSel?['bt-'+key]:[])).forEach(id=>$('#'+id).oninput=state.render);
+  const hasReal = rows.some(r=>r.canslim_real!=null && r.canslim_real!=='');
+  makeTable('t-'+key, rows, watchCols(hasReal), state);
+  (['q-'+key,'u-'+key].concat(btSel?['bt-'+key]:[]).concat(secs.length?['sec-'+key]:[]))
+    .forEach(id=>$('#'+id).oninput=state.render);
+  if(secSel) secSel.onchange=state.render;
+  if(newChk) newChk.onchange=state.render;
 }
 
 /* ===================== BACKTEST ===================== */

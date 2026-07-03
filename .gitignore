@@ -20,3 +20,8 @@ venv/
 
 # transient image encodings
 *.b64
+signal_history.sqlite
+sector_cache.sqlite
+
+# generated alert digests + run logs (alerts.py / run_daily.sh); keep the code
+alerts/

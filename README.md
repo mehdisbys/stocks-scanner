@@ -148,6 +148,36 @@ python -m signals.scan_base_div
 python -m signals.scan_base_div --no-base --timeframe daily --recent-days 20
 ```
 
+### Timeframes (`--timeframe`)
+
+`daily` and `weekly` run off the free long-history cache (weekly is resampled
+from daily). `4h` runs off **intraday** data and must be populated first from
+Polygon (1h bars, resampled to 4h). Because intraday has no bulk endpoint and
+the free Polygon tier is rate-limited (~5 calls/min), populate the names you
+care about before scanning:
+
+```python
+# one-off: cache 4h bars for the symbols you want to scan intraday
+import pandas as pd
+from signals.config import Config
+from signals.data.service import DataService
+from signals.data.base import Timeframe
+svc = DataService(Config.load())
+start = pd.Timestamp.utcnow() - pd.Timedelta(days=120)
+for sym in ["AAPL", "COF", "LULU"]:            # your list
+    svc.update_stock_live(sym, Timeframe.H4, start=start)
+```
+
+```bash
+# then scan 4h recent divergences (base scan is daily-calibrated, so use --no-base)
+python -m signals.scan_base_div --no-base --timeframe 4h --recent-days 30 \
+    --out recent_div_4h.csv
+```
+
+`build_dashboard.py` shows a **Recent Div (4h)** tab whenever `recent_div_4h.csv`
+exists, and `refresh.py --h4` runs the 4h scan as part of a refresh. Only symbols
+with a populated 4h cache produce rows; the rest are skipped.
+
 ### Enrichment columns (opt-in)
 
 Add screener columns straight into the output so the CSV/Sheet is ready to use
@@ -158,7 +188,8 @@ Add screener columns straight into the output so the CSV/Sheet is ready to use
 | `--canslim` | `canslim` | CAN SLIM **technical** proxy: price > SMA20/50/200 and RSI(14) > 50, scored `0/4`..`4/4 PASS`. Always computed from *daily* bars, even on `--timeframe weekly`. | price cache only |
 | `--wdb` | `wdb` | Deep-value screen: P/E < 10, P/B < 1, Price/Cash < 3, scored `0/3`..`3/3 PASS` (`n/a` when no fundamentals, e.g. ETFs). | `yfinance` + internet |
 | `--ai` | `ai_analysis` | One-click Google AI Mode (Gemini) URL running a structured equity-research prompt for the ticker. | none |
-| `--enrich` | all three | Shortcut for `--canslim --wdb --ai`. | as above |
+| `--sector` | `sector` | GICS-style sector (Healthcare, Technology, …). Cached in `sector_cache.sqlite`, so only the first run per symbol hits the network. Blank for ETFs. | `yfinance` + internet (first fetch only) |
+| `--enrich` | all four | Shortcut for `--canslim --wdb --ai --sector`. | as above |
 
 ```bash
 # Fully enriched daily watchlist, pushed to a Google Sheet
@@ -280,6 +311,8 @@ costs no extra data.
 ```bash
 python -m tests.test_indicators
 python -m tests.test_scoring
+python -m tests.test_backtest
+python -m tests.test_enrich     # CANSLIM/WDB/AI, progress, scan wiring, dashboard build
 ```
 
 `tests/test_indicators.py` holds **ground-truth** tests (hand-crafted
